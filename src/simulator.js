@@ -58,6 +58,7 @@ export class Simulator {
     this.sent = 0;
     this.inflight = 0;
     this.trueCtr = new Map();
+    this.lastDomains = new Map();
   }
 
   get running() { return !!this.timer; }
@@ -85,13 +86,29 @@ export class Simulator {
     this.inflight++;
     this.sent++;
     try {
-      const out = await this.exchange.auction(randomBidRequest());
+      const request = randomBidRequest();
+      const out = await this.exchange.auction(request);
       for (const r of out.results || []) {
-        if (r.filled && r.winner === 'dsp-1') this.simulateRender(r.bid);
+        if (r.filled && r.winner === 'dsp-1') {
+          this.lastDomains.set(r.bid.id, request.site.domain);
+          this.simulateRender(r.bid);
+        }
       }
     } finally {
       this.inflight--;
     }
+  }
+
+  /** Hidden ground truth: click propensity depends on campaign, site, device and ad size. */
+  clickProb(c, bid) {
+    if (!this.trueCtr.has(c.id)) this.trueCtr.set(c.id, 0.004 + Math.random() * 0.01);
+    const dom = this.lastDomains.get(bid.id) || '';
+    let p = this.trueCtr.get(c.id);
+    if (dom.startsWith('sports')) p *= 2.5;
+    if (dom.startsWith('shady')) p *= 0.2;
+    if (bid.w === 320 && bid.h === 50) p *= 1.8;
+    if (bid.w === 728) p *= 0.6;
+    return p;
   }
 
   simulateRender(bid) {
@@ -99,10 +116,8 @@ export class Simulator {
     if (Math.random() < 0.95) {
       this.bidder.onImpression(token);
       const c = this.bidder.store.get(bid.cid);
-      if (c) {
-        if (!this.trueCtr.has(c.id)) this.trueCtr.set(c.id, 0.004 + Math.random() * 0.02);
-        if (Math.random() < this.trueCtr.get(c.id)) this.bidder.onClick(token);
-      }
+      if (c && Math.random() < this.clickProb(c, bid)) this.bidder.onClick(token);
     }
+    this.lastDomains.delete(bid.id);
   }
 }

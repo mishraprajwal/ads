@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NBR, validateBidRequest, impSizes, requestDomain, requestCategories, userId, deviceType } from './openrtb.js';
+import { CtrModel, extractFeatures } from './ctr.js';
 
 const DAY_MS = 86_400_000;
 const HOLD_TTL_MS = 60_000; // how long an unresolved bid reserves budget
@@ -12,8 +13,9 @@ const PRIOR_WEIGHT = 200;
  * win / impression / click callbacks. Emits 'bid', 'win', 'impression', 'click'.
  */
 export class Bidder extends EventEmitter {
-  constructor({ store, secret, baseUrl = 'http://localhost:8080', now = () => Date.now() }) {
+  constructor({ store, secret, baseUrl = 'http://localhost:8080', now = () => Date.now(), model = new CtrModel() }) {
     super();
+    this.model = model;
     this.store = store;
     this.secret = secret || randomUUID();
     this.baseUrl = baseUrl;
@@ -56,7 +58,7 @@ export class Bidder extends EventEmitter {
 
     const { campaign: c, creative, price } = best;
     const bidId = randomUUID();
-    const token = this.sign({ b: bidId, c: c.id, cr: creative.id, u: user, p: price, t });
+    const token = this.sign({ b: bidId, c: c.id, cr: creative.id, u: user, p: price, t, f: best.feats });
     const amount = price / 1000;
     this.holds.set(bidId, { campaignId: c.id, amount, expires: t + HOLD_TTL_MS });
     this.holdTotals.set(c.id, (this.holdTotals.get(c.id) || 0) + amount);
@@ -104,16 +106,17 @@ export class Bidder extends EventEmitter {
 
     if (c.frequencyCap && this.freqCount(user, c, t) >= c.frequencyCap.count) return null;
 
-    const price = this.price(c);
+    const feats = c.goal === 'cpc' ? extractFeatures(req, imp, c.id, t) : null;
+    const price = this.price(c, feats);
     if (price < floor || price <= 0) return null;
     if (!this.budgetOk(c, price, t)) return null;
-    return { campaign: c, creative, price };
+    return { campaign: c, creative, price, feats };
   }
 
   /** Bid price in CPM. CPC goals translate target CPC into eCPM via predicted CTR. */
-  price(c) {
+  price(c, feats) {
     let p = c.bidCpm;
-    if (c.goal === 'cpc') p = c.targetCpc * this.predictCtr(c) * 1000;
+    if (c.goal === 'cpc') p = c.targetCpc * (feats ? this.model.predict(feats) : this.predictCtr(c)) * 1000;
     return Math.min(p, c.maxBidCpm);
   }
 
@@ -175,6 +178,7 @@ export class Bidder extends EventEmitter {
     const c = this.store.get(p.c);
     if (!c) return { ok: false, error: 'campaign gone' };
     c.stats.impressions++;
+    if (p.f) this.model.train(p.f, 0);
     const key = `${p.u}|${c.id}`;
     const arr = this.freq.get(key) || [];
     arr.push(this.now());
@@ -190,6 +194,7 @@ export class Bidder extends EventEmitter {
     const c = this.store.get(p.c);
     if (!c) return { ok: false, error: 'campaign gone' };
     c.stats.clicks++;
+    if (p.f) this.model.correctToClick(p.f);
     this.emit('click', { campaignId: c.id });
     return { ok: true };
   }

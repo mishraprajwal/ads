@@ -4,6 +4,7 @@ import { CampaignStore } from '../src/campaigns.js';
 import { Bidder } from '../src/bidder.js';
 import { Exchange } from '../src/exchange.js';
 import { createApp } from '../src/server.js';
+import { extractFeatures } from '../src/ctr.js';
 
 const creative = { w: 300, h: 250, markup: '<a href="{{CLICK_URL}}">ad</a>', adomain: ['a.com'] };
 const camp = (o = {}) => ({ name: 'c', bidCpm: 2, dailyBudget: 100, pacing: 'asap', creatives: [creative], ...o });
@@ -145,4 +146,33 @@ test('HTTP end-to-end: campaign, auction, tracking, stats', async () => {
     app.server.closeAllConnections();
     await new Promise((r) => app.server.close(r));
   }
+});
+
+test('CTR model learns segment differences and cpc bids follow them', () => {
+  const { store, bidder } = setup();
+  const c = store.create(camp({ goal: 'cpc', targetCpc: 1, maxBidCpm: 100, dailyBudget: 1e6 }));
+  const sports = req({ site: { domain: 'sports.example.com', cat: [] } });
+  const shady = req({ site: { domain: 'shady-clicks.biz', cat: [] } });
+  const feats = (r) => extractFeatures(r, r.imp[0], c.id, 1_700_000_000_000);
+  for (let i = 0; i < 20000; i++) {
+    const hot = i % 2 === 0;
+    const idx = feats(hot ? sports : shady);
+    bidder.model.train(idx, 0);
+    if (Math.random() < (hot ? 0.05 : 0.002)) bidder.model.correctToClick(idx);
+  }
+  const hot = bidder.model.predict(feats(sports));
+  const cold = bidder.model.predict(feats(shady));
+  assert.ok(hot > 0.03 && hot < 0.08, `hot ${hot}`);
+  assert.ok(cold < 0.01, `cold ${cold}`);
+  assert.ok(bidder.price(c, feats(sports)) > 5 * bidder.price(c, feats(shady)));
+});
+
+test('impression and click callbacks update the model via the signed token', () => {
+  const { store, bidder } = setup();
+  store.create(camp({ goal: 'cpc', targetCpc: 1, maxBidCpm: 100 }));
+  const bid = bidder.handle(req()).body.seatbid[0].bid[0];
+  const before = bidder.model.updates;
+  bidder.onImpression(tokenOf(bid));
+  bidder.onClick(tokenOf(bid));
+  assert.equal(bidder.model.updates, before + 2);
 });

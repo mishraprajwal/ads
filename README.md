@@ -12,6 +12,7 @@ npm test
 | Module | Role |
 |---|---|
 | `src/bidder.js` | DSP: targeting, floors, CPM/CPC pricing (Bayesian pCTR), daily/total budgets, even/ASAP pacing, in-flight budget holds, frequency caps, HMAC-signed idempotent win/imp/click callbacks |
+| `src/ctr.js` | Online logistic-regression click model (hashed features: campaign, site, size, device, OS, country, hour + crosses; AdaGrad). Trained from signed impression/click callbacks; prices CPC campaigns per impression |
 | `src/exchange.js` | Parallel fan-out with `tmax` timeout, per-impression auction (second price = runner-up + $0.01, or first price), floor and size checks, win notices |
 | `src/campaigns.js` | Campaign store + validation |
 | `src/metrics.js` | Rolling per-second counters, latency percentiles |
