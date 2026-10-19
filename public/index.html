@@ -21,7 +21,7 @@
   <span id="state"></span></header>
 <div class="grid" id="cards"></div>
 <section><h3>Requests / filled / wins per second (last 60s)</h3><canvas id="chart" width="1200" height="160"></canvas></section>
-<section><h3>Campaigns</h3><table><thead><tr><th>Campaign</th><th>Goal</th><th>Bid CPM</th><th>Bids</th><th>Wins</th><th>Imps</th><th>CTR</th><th>pCTR</th><th>Spend today</th><th>Budget</th><th></th></tr></thead><tbody id="rows"></tbody></table></section>
+<section><h3>Campaigns</h3><table><thead><tr><th>Campaign</th><th>Goal</th><th>Bid CPM</th><th>Bids</th><th>Wins</th><th>Imps</th><th>CTR</th><th>pCTR</th><th>Conv</th><th>CVR</th><th>Bid mult</th><th>Spend today</th><th>Budget</th><th></th></tr></thead><tbody id="rows"></tbody></table></section>
 <script>
 const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pct=n=>(n*100).toFixed(2)+'%', usd=n=>'$'+n.toFixed(2);
@@ -37,10 +37,10 @@ function draw(series){
 }
 function render(d){
   $('state').textContent=d.simulator.running?`running @ ${d.simulator.rps} rps`:'idle';
-  const cards=[['Requests',d.requests],['Fill rate',pct(d.fillRate)],['Wins',d.wins],['Impressions',d.impressions],['Clicks',d.clicks],['CTR',pct(d.ctr)],['Spend',usd(d.spend)],['eCPM',usd(d.ecpm)],['p50 / p95 / p99 ms',[d.latencyMs.p50,d.latencyMs.p95,d.latencyMs.p99].map(n=>n.toFixed(1)).join(' / ')],['Timeouts',d.timeouts]];
+  const cards=[['Requests',d.requests],['Fill rate',pct(d.fillRate)],['Wins',d.wins],['Impressions',d.impressions],['Clicks',d.clicks],['Conversions',d.conversions],['CTR',pct(d.ctr)],['Spend',usd(d.spend)],['eCPM',usd(d.ecpm)],['p50 / p95 / p99 ms',[d.latencyMs.p50,d.latencyMs.p95,d.latencyMs.p99].map(n=>n.toFixed(1)).join(' / ')],['Timeouts',d.timeouts]];
   $('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><span>${k}</span><b>${v}</b></div>`).join('');
   draw(d.series);
-  $('rows').innerHTML=d.campaigns.map(c=>`<tr class="${c.status}"><td>${esc(c.name)}</td><td>${c.goal}</td><td>${c.bidCpm.toFixed(2)}</td><td>${c.stats.bids}</td><td>${c.stats.wins}</td><td>${c.stats.impressions}</td><td>${pct(c.ctr)}</td><td>${pct(c.pctr)}</td><td>${usd(c.spendToday)}</td><td>${usd(c.dailyBudget)}</td><td><button onclick="toggle('${c.id}','${c.status}')">${c.status==='active'?'Pause':'Resume'}</button></td></tr>`).join('');
+  $('rows').innerHTML=d.campaigns.map(c=>`<tr class="${c.status}"><td>${esc(c.name)}</td><td>${c.goal}</td><td>${c.bidCpm.toFixed(2)}</td><td>${c.stats.bids}</td><td>${c.stats.wins}</td><td>${c.stats.impressions}</td><td>${pct(c.ctr)}</td><td>${pct(c.pctr)}</td><td>${c.stats.conversions}</td><td>${pct(c.cvr)}</td><td>${c.multiplier.toFixed(2)}</td><td>${usd(c.spendToday)}</td><td>${usd(c.dailyBudget)}</td><td><button onclick="toggle('${c.id}','${c.status}')">${c.status==='active'?'Pause':'Resume'}</button></td></tr>`).join('');
 }
 new EventSource('/api/stream').onmessage=e=>render(JSON.parse(e.data));
 </script></body></html>

@@ -4,7 +4,7 @@ export class Metrics {
     this.now = now;
     this.windowSec = windowSec;
     this.buckets = new Map(); // second -> counters
-    this.totals = { requests: 0, filled: 0, noBid: 0, timeouts: 0, wins: 0, impressions: 0, clicks: 0, spend: 0, revenue: 0 };
+    this.totals = { requests: 0, filled: 0, noBid: 0, timeouts: 0, wins: 0, impressions: 0, clicks: 0, conversions: 0, spend: 0, revenue: 0 };
     this.lat = new Array(2048).fill(0);
     this.latN = 0;
   }

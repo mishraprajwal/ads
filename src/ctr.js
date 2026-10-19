@@ -42,7 +42,7 @@ export function extractFeatures(req, imp, campaignId, t) {
  * Online logistic regression over hashed features, trained with per-weight
  * adaptive learning rates (AdaGrad). Cheap enough to score in the bid path.
  */
-export class CtrModel {
+export class LogisticModel {
   constructor({ lr = 0.1, l2 = 1e-6, prior = 0.01 } = {}) {
     this.w = new Float32Array(SIZE);
     this.g = new Float32Array(SIZE).fill(1e-3);
@@ -83,4 +83,14 @@ export class CtrModel {
     }
     this.updates++;
   }
+}
+
+/** P(click | impression). */
+export class CtrModel extends LogisticModel {
+  constructor(opts = {}) { super({ prior: 0.01, ...opts }); }
+}
+
+/** P(conversion | click). Trained only on clicks, so its base rate is much higher than CTR. */
+export class CvrModel extends LogisticModel {
+  constructor(opts = {}) { super({ prior: 0.05, ...opts }); }
 }

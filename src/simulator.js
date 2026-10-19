@@ -59,6 +59,8 @@ export class Simulator {
     this.inflight = 0;
     this.trueCtr = new Map();
     this.lastDomains = new Map();
+    this.lastDevices = new Map();
+    this.trueCvr = new Map();
   }
 
   get running() { return !!this.timer; }
@@ -91,6 +93,7 @@ export class Simulator {
       for (const r of out.results || []) {
         if (r.filled && r.winner === 'dsp-1') {
           this.lastDomains.set(r.bid.id, request.site.domain);
+          this.lastDevices.set(r.bid.id, request.device.devicetype);
           this.simulateRender(r.bid);
         }
       }
@@ -111,13 +114,28 @@ export class Simulator {
     return p;
   }
 
+  /** Hidden ground truth for P(convert | click): tech sites and desktop convert best. */
+  convProb(c, bid) {
+    if (!this.trueCvr.has(c.id)) this.trueCvr.set(c.id, 0.04 + Math.random() * 0.08);
+    const dom = this.lastDomains.get(bid.id) || '';
+    let p = this.trueCvr.get(c.id);
+    if (dom.startsWith('tech')) p *= 2.5;
+    if (dom.startsWith('shady')) p *= 0.2;
+    if (this.lastDevices.get(bid.id) === 2) p *= 1.6;
+    return p;
+  }
+
   simulateRender(bid) {
     const token = new URL(bid.nurl).searchParams.get('t');
     if (Math.random() < 0.95) {
       this.bidder.onImpression(token);
       const c = this.bidder.store.get(bid.cid);
-      if (c && Math.random() < this.clickProb(c, bid)) this.bidder.onClick(token);
+      if (c && Math.random() < this.clickProb(c, bid)) {
+        this.bidder.onClick(token);
+        if (Math.random() < this.convProb(c, bid)) this.bidder.onConversion(token);
+      }
     }
     this.lastDomains.delete(bid.id);
+    this.lastDevices.delete(bid.id);
   }
 }

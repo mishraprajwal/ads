@@ -10,6 +10,7 @@ export function validateCampaign(c) {
   if (c.totalBudget != null && !(c.totalBudget > 0)) return 'totalBudget must be > 0';
   if (c.maxBidCpm != null && !(c.maxBidCpm >= c.bidCpm)) return 'maxBidCpm must be >= bidCpm';
   if (c.goal === 'cpc' && !(c.targetCpc > 0)) return 'targetCpc required for cpc goal';
+  if (c.goal === 'cpa' && !(c.targetCpa > 0)) return 'targetCpa required for cpa goal';
   if (!Array.isArray(c.creatives) || c.creatives.length === 0) return 'at least one creative required';
   for (const cr of c.creatives) {
     if (!(cr.w > 0 && cr.h > 0)) return 'creative w/h required';
@@ -54,9 +55,10 @@ export class CampaignStore {
       status: input.status === 'paused' ? 'paused' : 'active',
       bidCpm: input.bidCpm,
       maxBidCpm: input.maxBidCpm ?? input.bidCpm,
-      // 'cpm' = fixed bid; 'cpc' = bid derived from targetCpc * predicted CTR
-      goal: input.goal === 'cpc' ? 'cpc' : 'cpm',
+      // 'cpm' = fixed bid; 'cpc' = targetCpc * pCTR; 'cpa' = targetCpa * pCTR * pCVR
+      goal: ['cpc', 'cpa'].includes(input.goal) ? input.goal : 'cpm',
       targetCpc: input.targetCpc ?? null,
+      targetCpa: input.targetCpa ?? null,
       dailyBudget: input.dailyBudget,
       totalBudget: input.totalBudget ?? null,
       pacing: input.pacing === 'asap' ? 'asap' : 'even',
@@ -70,7 +72,7 @@ export class CampaignStore {
         adomain: cr.adomain || [],
       })),
       createdAt: t,
-      stats: { bids: 0, wins: 0, impressions: 0, clicks: 0, spend: 0 },
+      stats: { bids: 0, wins: 0, impressions: 0, clicks: 0, conversions: 0, spend: 0 },
       day: { start: dayStart(t), spend: 0 },
     };
     this.campaigns.set(id, c);
@@ -86,7 +88,7 @@ export class CampaignStore {
     if (!c) throw Object.assign(new Error('not found'), { status: 404 });
     const err = validateCampaign({ ...c, ...patch });
     if (err) throw Object.assign(new Error(err), { status: 400 });
-    for (const k of ['name', 'status', 'bidCpm', 'maxBidCpm', 'dailyBudget', 'totalBudget', 'frequencyCap', 'pacing', 'goal', 'targetCpc']) {
+    for (const k of ['name', 'status', 'bidCpm', 'maxBidCpm', 'dailyBudget', 'totalBudget', 'frequencyCap', 'pacing', 'goal', 'targetCpc', 'targetCpa']) {
       if (k in patch) c[k] = patch[k];
     }
     if (patch.targeting) c.targeting = normalizeTargeting(patch.targeting);

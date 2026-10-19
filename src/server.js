@@ -20,6 +20,7 @@ export function createApp({ baseUrl = 'http://localhost:8080', secret, auctionTy
   bidder.on('win', ({ price }) => { metrics.inc('wins'); metrics.inc('spend', price / 1000); });
   bidder.on('impression', () => metrics.inc('impressions'));
   bidder.on('click', () => metrics.inc('clicks'));
+  bidder.on('conversion', () => metrics.inc('conversions'));
 
   const dsp = {
     id: 'dsp-1',
@@ -37,6 +38,9 @@ export function createApp({ baseUrl = 'http://localhost:8080', secret, auctionTy
       const url = new URL(bid.nurl);
       bidder.onWin(url.searchParams.get('t'), url.searchParams.get('price'));
     },
+    onMarket(bidderId, bid, marketPrice, won) {
+      if (bidderId === 'dsp-1') bidder.observeMarket(new URL(bid.nurl).searchParams.get('t'), marketPrice, won);
+    },
     onResult(out) {
       for (const r of out.results) {
         metrics.inc('requests');
@@ -53,6 +57,8 @@ export function createApp({ baseUrl = 'http://localhost:8080', secret, auctionTy
     ...c,
     ctr: c.stats.impressions ? c.stats.clicks / c.stats.impressions : 0,
     pctr: bidder.predictCtr(c),
+    cvr: c.stats.clicks ? c.stats.conversions / c.stats.clicks : 0,
+    multiplier: bidder.mult.get(c.id)?.m ?? 1,
     spendToday: c.day.spend,
   });
   const snapshot = () => ({
@@ -115,6 +121,10 @@ export function createApp({ baseUrl = 'http://localhost:8080', secret, auctionTy
       if (kind === 'imp') {
         const r = bidder.onImpression(t);
         return send(res, r.ok ? 200 : 400, GIF, { 'content-type': 'image/gif', 'cache-control': 'no-store' });
+      }
+      if (kind === 'conv') {
+        const r = bidder.onConversion(t);
+        return send(res, r.ok ? 200 : 400, r);
       }
       if (kind === 'click') {
         const r = bidder.onClick(t);
@@ -180,6 +190,7 @@ export function seedDemo(store) {
   const creatives = (label) => [[300, 250], [728, 90], [320, 50], [160, 600]].map(([w, h]) => ({ w, h, markup: ad(w, h, label), adomain: ['brand.example'] }));
   store.create({ name: 'Brand Awareness (US, all devices)', bidCpm: 2.2, maxBidCpm: 3, dailyBudget: 2000, pacing: 'asap', targeting: { countries: ['US'] }, frequencyCap: { count: 3, windowSec: 3600 }, creatives: creatives('Brand') });
   store.create({ name: 'Performance (CPC $0.50, mobile)', goal: 'cpc', targetCpc: 0.5, bidCpm: 1, maxBidCpm: 6, dailyBudget: 1500, pacing: 'asap', targeting: { devices: ['mobile', 'tablet'] }, creatives: creatives('Install now') });
+  store.create({ name: 'Lead Gen (CPA $12, value-based)', goal: 'cpa', targetCpa: 12, bidCpm: 1, maxBidCpm: 20, dailyBudget: 1200, pacing: 'even', creatives: creatives('Sign up') });
   store.create({ name: 'Sports Fans (EU/IN)', bidCpm: 3, dailyBudget: 1000, pacing: 'asap', targeting: { categories: ['IAB17'], countries: ['GB', 'DE', 'IN'] }, creatives: creatives('Game day') });
   store.create({ name: 'Retargeting Lite', bidCpm: 1.5, dailyBudget: 800, pacing: 'asap', targeting: { domainBlock: ['shady-clicks.biz'] }, frequencyCap: { count: 2, windowSec: 600 }, creatives: creatives('Come back') });
 }

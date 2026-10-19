@@ -7,12 +7,15 @@ import { validateBidRequest, impSizes } from './openrtb.js';
  * A bidder is { id, bid(request) => Promise<OpenRTB response | null> }.
  */
 export class Exchange {
-  constructor({ bidders = [], auctionType = 2, tmaxMs = 120, onResult = () => {}, fireWin }) {
+  constructor({ bidders = [], auctionType = 2, tmaxMs = 120, onResult = () => {}, fireWin, onMarket }) {
     this.bidders = bidders;
     this.auctionType = auctionType; // 1 = first price, 2 = second price
     this.tmaxMs = tmaxMs;
     this.onResult = onResult;
     this.fireWin = fireWin; // (bidderId, bid, clearingPrice) => void
+    // (bidderId, bid, marketPrice, won) => void. marketPrice is the highest competing bid
+    // (or the floor), i.e. the price this bidder had to beat. Sent to winners and losers.
+    this.onMarket = onMarket;
   }
 
   async auction(req) {
@@ -20,6 +23,7 @@ export class Exchange {
     const err = validateBidRequest(req);
     if (err) return { error: err, status: 400 };
     const tmax = Math.min(req.tmax || this.tmaxMs, this.tmaxMs);
+    req = { ...req, at: this.auctionType };
 
     const settled = await Promise.all(this.bidders.map((b) => this.callBidder(b, req, tmax)));
     const timeouts = settled.filter((s) => s.timedOut).length;
@@ -47,6 +51,10 @@ export class Exchange {
         : Math.min(win.bid.price, Math.max(floor, runnerUp ? runnerUp.bid.price + 0.01 : floor));
       const price = Math.round(clearing * 10000) / 10000;
       this.fireWin?.(win.bidder, win.bid, price);
+      entries.forEach((e, i) => {
+        const others = i === 0 ? runnerUp : win;
+        this.onMarket?.(e.bidder, e.bid, Math.max(floor, others ? others.bid.price : 0), i === 0);
+      });
       results.push({ impid: imp.id, filled: true, winner: win.bidder, bid: { ...win.bid, price }, bidPrice: win.bid.price, clearingPrice: price, numBids: entries.length });
     }
 

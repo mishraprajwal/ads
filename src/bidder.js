@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NBR, validateBidRequest, impSizes, requestDomain, requestCategories, userId, deviceType } from './openrtb.js';
-import { CtrModel, extractFeatures } from './ctr.js';
+import { CtrModel, CvrModel, extractFeatures } from './ctr.js';
+import { BidLandscape } from './landscape.js';
 
 const DAY_MS = 86_400_000;
 const HOLD_TTL_MS = 60_000; // how long an unresolved bid reserves budget
@@ -13,9 +14,12 @@ const PRIOR_WEIGHT = 200;
  * win / impression / click callbacks. Emits 'bid', 'win', 'impression', 'click'.
  */
 export class Bidder extends EventEmitter {
-  constructor({ store, secret, baseUrl = 'http://localhost:8080', now = () => Date.now(), model = new CtrModel() }) {
+  constructor({ store, secret, baseUrl = 'http://localhost:8080', now = () => Date.now(), model = new CtrModel(), cvrModel = new CvrModel(), landscape = new BidLandscape() }) {
     super();
     this.model = model;
+    this.cvrModel = cvrModel;
+    this.landscape = landscape;
+    this.mult = new Map(); // campaignId -> { m, ts } budget-pacing bid multiplier
     this.store = store;
     this.secret = secret || randomUUID();
     this.baseUrl = baseUrl;
@@ -23,7 +27,7 @@ export class Bidder extends EventEmitter {
     this.freq = new Map(); // `${user}|${campaign}` -> impression timestamps
     this.holds = new Map(); // bidId -> { campaignId, amount, expires }
     this.holdTotals = new Map(); // campaignId -> reserved $
-    this.seen = { win: new Set(), imp: new Set(), click: new Set() }; // idempotency
+    this.seen = { win: new Set(), imp: new Set(), click: new Set(), conv: new Set() }; // idempotency
     this.seenOrder = [];
   }
 
@@ -58,7 +62,7 @@ export class Bidder extends EventEmitter {
 
     const { campaign: c, creative, price } = best;
     const bidId = randomUUID();
-    const token = this.sign({ b: bidId, c: c.id, cr: creative.id, u: user, p: price, t, f: best.feats });
+    const token = this.sign({ b: bidId, c: c.id, cr: creative.id, u: user, p: price, t, f: best.feats, s: best.seg });
     const amount = price / 1000;
     this.holds.set(bidId, { campaignId: c.id, amount, expires: t + HOLD_TTL_MS });
     this.holdTotals.set(c.id, (this.holdTotals.get(c.id) || 0) + amount);
@@ -106,18 +110,58 @@ export class Bidder extends EventEmitter {
 
     if (c.frequencyCap && this.freqCount(user, c, t) >= c.frequencyCap.count) return null;
 
-    const feats = c.goal === 'cpc' ? extractFeatures(req, imp, c.id, t) : null;
-    const price = this.price(c, feats);
+    const valued = c.goal !== 'cpm';
+    const feats = valued ? extractFeatures(req, imp, c.id, t) : null;
+    const seg = `${requestDomain(req)}|${creative.w}x${creative.h}`;
+    const price = valued ? this.optimizedBid(c, feats, { floor, at: req.at === 1 ? 1 : 2, seg }, t) : this.price(c);
     if (price < floor || price <= 0) return null;
     if (!this.budgetOk(c, price, t)) return null;
-    return { campaign: c, creative, price, feats };
+    return { campaign: c, creative, price, feats, seg };
   }
 
   /** Bid price in CPM. CPC goals translate target CPC into eCPM via predicted CTR. */
   price(c, feats) {
-    let p = c.bidCpm;
-    if (c.goal === 'cpc') p = c.targetCpc * (feats ? this.model.predict(feats) : this.predictCtr(c)) * 1000;
-    return Math.min(p, c.maxBidCpm);
+    return Math.min(this.value(c, feats), c.maxBidCpm);
+  }
+
+  /** Expected value of one impression in CPM: advertiser's goal value x predicted outcome rates. */
+  value(c, feats) {
+    if (c.goal === 'cpm') return c.bidCpm;
+    const pctr = feats ? this.model.predict(feats) : this.predictCtr(c);
+    if (c.goal === 'cpc') return c.targetCpc * pctr * 1000;
+    const pcvr = feats ? this.cvrModel.predict(feats) : this.predictCvr(c);
+    return c.targetCpa * pctr * pcvr * 1000;
+  }
+
+  /** Value -> bid: budget multiplier, cap, then auction-aware shading from the learned landscape. */
+  optimizedBid(c, feats, { floor, at, seg }, t) {
+    const v = Math.min(this.value(c, feats) * this.multiplier(c, t), c.maxBidCpm);
+    return this.landscape.optimalBid({ value: v, floor, at, seg });
+  }
+
+  /**
+   * Feedback controller: scales bids down when a campaign spends faster than its
+   * daily schedule and back up when it lags, so it can win the cheaper, better impressions.
+   */
+  multiplier(c, t) {
+    if (c.pacing !== 'even') return 1;
+    let s = this.mult.get(c.id);
+    if (!s) { s = { m: 1, ts: t }; this.mult.set(c.id, s); }
+    if (t - s.ts >= 1000) {
+      this.store.rollDay(c);
+      const elapsed = (t - c.day.start) / DAY_MS;
+      const target = c.dailyBudget * (elapsed + 0.005);
+      const ratio = (c.day.spend + (this.holdTotals.get(c.id) || 0)) / target;
+      if (ratio > 1.05) s.m = Math.max(0.2, s.m * 0.97);
+      else if (ratio < 0.95) s.m = Math.min(1, s.m * 1.03);
+      s.ts = t;
+    }
+    return s.m;
+  }
+
+  predictCvr(c) {
+    const { clicks, conversions } = c.stats;
+    return (conversions + 0.05 * 50) / (clicks + 50);
   }
 
   predictCtr(c) {
@@ -194,9 +238,33 @@ export class Bidder extends EventEmitter {
     const c = this.store.get(p.c);
     if (!c) return { ok: false, error: 'campaign gone' };
     c.stats.clicks++;
-    if (p.f) this.model.correctToClick(p.f);
+    if (p.f) {
+      this.model.correctToClick(p.f);
+      this.cvrModel.train(p.f, 0); // conversion label defaults to 0 until a conversion arrives
+    }
     this.emit('click', { campaignId: c.id });
     return { ok: true };
+  }
+
+  onConversion(token) {
+    const p = this.verify(token);
+    if (!p) return { ok: false, error: 'bad token' };
+    if (!this.seen.click.has(p.b)) return { ok: false, error: 'no click recorded' };
+    if (this.once('conv', p.b)) return { ok: true, duplicate: true };
+    const c = this.store.get(p.c);
+    if (!c) return { ok: false, error: 'campaign gone' };
+    c.stats.conversions++;
+    if (p.f) this.cvrModel.correctToClick(p.f);
+    this.emit('conversion', { campaignId: c.id });
+    return { ok: true };
+  }
+
+  /** Exchange feedback (internal, not exposed over HTTP): learn the price we had to beat. */
+  observeMarket(token, marketPrice, won) {
+    const p = this.verify(token);
+    if (!p) return;
+    this.landscape.observe(p.s, marketPrice);
+    if (!won) this.release(p.b); // lost: free the reserved budget right away
   }
 
   // ---- internals ---------------------------------------------------------
