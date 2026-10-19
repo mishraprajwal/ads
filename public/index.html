@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>RTB Platform</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body{font:14px system-ui,sans-serif;margin:0;background:#0f1419;color:#e6e6e6}
+  header{display:flex;gap:12px;align-items:center;padding:12px 20px;background:#161c24;border-bottom:1px solid #2a3340}
+  h1{font-size:16px;margin:0 auto 0 0}
+  button{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:6px 12px;cursor:pointer}
+  button.stop{background:#b91c1c} input{width:70px;background:#0f1419;color:#fff;border:1px solid #2a3340;padding:5px;border-radius:4px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;padding:16px 20px}
+  .card{background:#161c24;border:1px solid #2a3340;border-radius:6px;padding:12px}
+  .card b{display:block;font-size:20px;margin-top:4px} .card span{color:#8b98a8;font-size:12px}
+  section{padding:0 20px 20px} canvas{width:100%;height:160px;background:#161c24;border:1px solid #2a3340;border-radius:6px}
+  table{width:100%;border-collapse:collapse;background:#161c24} th,td{padding:8px;text-align:right;border-bottom:1px solid #2a3340}
+  th:first-child,td:first-child{text-align:left} th{color:#8b98a8;font-weight:500}
+  .paused{opacity:.5}
+</style></head><body>
+<header><h1>Real-Time Bidding Platform</h1>
+  <label>RPS <input id="rps" type="number" value="200" min="1" max="5000"></label>
+  <button id="start">Start traffic</button><button id="stop" class="stop">Stop</button>
+  <span id="state"></span></header>
+<div class="grid" id="cards"></div>
+<section><h3>Requests / filled / wins per second (last 60s)</h3><canvas id="chart" width="1200" height="160"></canvas></section>
+<section><h3>Campaigns</h3><table><thead><tr><th>Campaign</th><th>Goal</th><th>Bid CPM</th><th>Bids</th><th>Wins</th><th>Imps</th><th>CTR</th><th>pCTR</th><th>Spend today</th><th>Budget</th><th></th></tr></thead><tbody id="rows"></tbody></table></section>
+<script>
+const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct=n=>(n*100).toFixed(2)+'%', usd=n=>'$'+n.toFixed(2);
+$('start').onclick=()=>fetch('/api/simulator/start',{method:'POST',body:JSON.stringify({rps:+$('rps').value})});
+$('stop').onclick=()=>fetch('/api/simulator/stop',{method:'POST'});
+window.toggle=(id,status)=>fetch('/api/campaigns/'+id,{method:'PATCH',body:JSON.stringify({status:status==='active'?'paused':'active'})});
+function draw(series){
+  const c=$('chart'),x=c.getContext('2d'),W=c.width,H=c.height;x.clearRect(0,0,W,H);
+  const max=Math.max(1,...series.map(s=>s.requests));
+  [['requests','#6b7280'],['filled','#2563eb'],['wins','#22c55e']].forEach(([k,col])=>{
+    x.beginPath();x.strokeStyle=col;x.lineWidth=2;
+    series.forEach((s,i)=>{const px=i*W/(series.length-1),py=H-8-(s[k]/max)*(H-16);i?x.lineTo(px,py):x.moveTo(px,py)});x.stroke();});
+}
+function render(d){
+  $('state').textContent=d.simulator.running?`running @ ${d.simulator.rps} rps`:'idle';
+  const cards=[['Requests',d.requests],['Fill rate',pct(d.fillRate)],['Wins',d.wins],['Impressions',d.impressions],['Clicks',d.clicks],['CTR',pct(d.ctr)],['Spend',usd(d.spend)],['eCPM',usd(d.ecpm)],['p50 / p95 / p99 ms',[d.latencyMs.p50,d.latencyMs.p95,d.latencyMs.p99].map(n=>n.toFixed(1)).join(' / ')],['Timeouts',d.timeouts]];
+  $('cards').innerHTML=cards.map(([k,v])=>`<div class="card"><span>${k}</span><b>${v}</b></div>`).join('');
+  draw(d.series);
+  $('rows').innerHTML=d.campaigns.map(c=>`<tr class="${c.status}"><td>${esc(c.name)}</td><td>${c.goal}</td><td>${c.bidCpm.toFixed(2)}</td><td>${c.stats.bids}</td><td>${c.stats.wins}</td><td>${c.stats.impressions}</td><td>${pct(c.ctr)}</td><td>${pct(c.pctr)}</td><td>${usd(c.spendToday)}</td><td>${usd(c.dailyBudget)}</td><td><button onclick="toggle('${c.id}','${c.status}')">${c.status==='active'?'Pause':'Resume'}</button></td></tr>`).join('');
+}
+new EventSource('/api/stream').onmessage=e=>render(JSON.parse(e.data));
+</script></body></html>

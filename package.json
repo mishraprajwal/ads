@@ -1,0 +1,11 @@
+{
+  "name": "rtb-platform",
+  "version": "1.0.0",
+  "description": "Real-time ad bidding platform: OpenRTB 2.5 DSP bidder, exchange auctions, tracking, pacing and live dashboard",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/rtb.test.js"
+  },
+  "engines": { "node": ">=20" }
+}
